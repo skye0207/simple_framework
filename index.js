@@ -1,16 +1,149 @@
-// const jsdom = require("jsdom");
-// const babel = require("@babel/core");
 
-// const JSDOM = jsdom.JSDOM;
-// const document = new JSDOM(``).window.document;
+function createTextElement(text) {
+  return {
+      type: "TEXT_ELEMENT",
+      props: {
+          nodeValue: text,
+          children: [],
+      },
+  }
+}
 
-const createElement = (type, props, ...children) => {
+function createElement(type, props, ...children) {
   return {
     type,
-    props,
-    children
+    props: {
+      ...props,
+      children: children.map(child =>
+          typeof child === "object"
+          ? child
+          : createTextElement(child)
+      ),
+  }
   };
 }
+
+// 当前处理到的fiber节点
+let nextFiberReconcileWork = null;
+// 根fiber节点
+let wipRoot = null;
+
+function render(element, container) {
+  console.log("render\nelement", element, "\ncontainer", container);
+  wipRoot = {
+    dom: container,
+    props: {
+      children: [element],
+    }
+  }
+  nextFiberReconcileWork = wipRoot;
+}
+
+function reconcileChildren(wipFiber, elements) {
+  // 将vdom转成child, sibling, 然后返回这样串联起来的fiber链表
+  // 每一个vdom的elements, 如果index是0， 那就是child串联， 否则
+  // 就是sibling串联，创建出来的节点都要用return指向父节点
+  let index = 0;
+  let prevSibling = null;
+
+  while(index < elements.length) {
+    const element = elements[index];
+    let newFiber = {
+      type: element.type,
+      props: element.props,
+      dom: null,
+      return: wipFiber,
+      effectTag: "PLACEMENT"
+    }
+    if (index === 0) {
+      wipFiber.child = newFiber;
+    } else {
+      prevSibling.sibling = newFiber;
+    }
+    prevSibling = newFiber;
+    index++;
+  }
+}
+
+function createDom(fiber) {
+  const dom = 
+    fiber.type === "TEXT_ELEMENT" 
+    ? document.createTextNode("")
+    : document.createElement(fiber.type);
+    for(const prop in fiber.props) {
+      setAttribute(dom, prop, fiber.props[prop]);
+    }
+    return dom;
+}
+
+function reconcile(fiber) {
+  console.log("reconcile\nfiber", fiber)
+  if(!fiber.dom) {
+    fiber.dom = createDom(fiber)
+  }
+  reconcileChildren(fiber, fiber.props.children);
+}
+
+// reconcile的过程
+function performNextWork(fiber) {
+  console.log("performNextWork\nfiber", fiber);
+  reconcile(fiber);
+  if(fiber.child) {
+    return fiber.child;
+  }
+  let nextFiber = fiber;
+  while(nextFiber) {
+    if(nextFiber.sibling) {
+      return nextFiber.sibling;
+    }
+    nextFiber = nextFiber.return;
+  }
+}
+
+function commitWork(fiber) {
+  console.log("commitWork\nfiber", fiber);
+  if(!fiber) {
+    return; 
+  }
+  let domParentFiber = fiber.return;
+  while(!domParentFiber.dom) {
+    domParentFiber = domParentFiber.return;
+  }
+  const domParent = domParentFiber.dom;
+
+  if(fiber.effectTag === "PLACEMENT" && fiber.dom != null) {
+    domParent.appendChild(fiber.dom);
+  }
+  commitWork(fiber.child)
+  commitWork(fiber.sibling)
+}
+
+function commitRoot() {
+  console.log("commitRoot");
+  commitWork(wipRoot.child);
+  wipRoot = null;
+}
+
+// ----schdule ----
+// 空闲调度，不断地循环，将vdom转fiber
+function workLoop(deadline) {
+  console.log("workLoop\ndeadline", deadline.timeRemaining());
+  let shouldYield = false;
+  while(nextFiberReconcileWork && !shouldYield) {
+    nextFiberReconcileWork = performNextWork(
+      nextFiberReconcileWork
+    );
+    shouldYield = deadline.timeRemaining() < 1;
+  }
+
+  if(!nextFiberReconcileWork) {
+    commitRoot();
+  }
+
+  requestIdleCallback(workLoop);
+}
+
+requestIdleCallback(workLoop);
 
 function Item(props) {
   return (
@@ -195,7 +328,13 @@ function isRefAttr(key, value) {
 }
 
 const setAttribute = (dom, key, value) => {
-  if (isEventListenerAttr(key, value)) {
+  if(key === 'children') {
+    return;
+  }
+
+  if (key === 'nodeValue'){
+    dom.textContent = value;
+  } else if (isEventListenerAttr(key, value)) {
     const eventType = key.slice(2).toLowerCase();
     dom.__handlers = dom.__handlers || {};
     dom.removeEventListener(eventType, dom.__handlers[eventType]);
@@ -254,22 +393,36 @@ function renderComponent(vdom, parent) {
   }
 }
 
-const render = (vdom, parent = null) => {
-  const mount = parent ? (el => parent.appendChild(el)) : (el => el);
-  if (isComponentVdom(vdom)){
-    renderComponent(vdom, parent);
-  } else if (isTextVdom(vdom)) {
-    return mount(document.createTextNode(vdom));
-  } else if(isElementVdom(vdom)) {
-    const dom = mount(document.createElement(vdom.type));
-    for (const child of [].concat(...vdom.children)) {
-      render(child, dom);
-    }
-    for (const prop in vdom.props) {
-      setAttribute(dom, prop, vdom.props[prop]);
-    }
-    return dom;
-  }
+// const render = (vdom, parent = null) => {
+//   const mount = parent ? (el => parent.appendChild(el)) : (el => el);
+//   if (isComponentVdom(vdom)){
+//     renderComponent(vdom, parent);
+//   } else if (isTextVdom(vdom)) {
+//     return mount(document.createTextNode(vdom));
+//   } else if(isElementVdom(vdom)) {
+//     const dom = mount(document.createElement(vdom.type));
+//     for (const child of [].concat(...vdom.children)) {
+//       render(child, dom);
+//     }
+//     for (const prop in vdom.props) {
+//       setAttribute(dom, prop, vdom.props[prop]);
+//     }
+//     return dom;
+//   }
+// }
+
+
+const data = {
+  item1: 'bb',
+  item2: 'cc'
 }
 
-render(<List textColor={'#000'}/>, document.getElementById('root'));
+const jsx =  (<ul className="list">
+  <li className="item" style={{ background: 'blue', color: 'pink' }} onClick={() => alert(2)}>aa</li>
+  <li className="item">{data.item1}<i>xxx</i></li>
+  <li className="item">{data.item2}</li>
+</ul>);
+
+
+// render(<List textColor={'#000'}/>, document.getElementById('root'));
+render(jsx, document.getElementById('root'));
